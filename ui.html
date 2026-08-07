@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KMS — удаление ссылки на родительскую страницу</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="bar__mark">KMS</div>
+    <div class="bar__text">
+      <h1>Удаление ссылки на родительскую страницу</h1>
+      <p>Пространство 2198 · правка и публикация по списку идентификаторов</p>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="card" aria-labelledby="input-title">
+      <h2 id="input-title" class="card__title">Исходные данные</h2>
+
+      <label class="field">
+        <span class="field__label">Идентификаторы страниц</span>
+        <span class="field__hint">По одному в строке</span>
+        <textarea id="ids" class="field__area mono" rows="14" spellcheck="false"
+                  placeholder="132456&#10;132457&#10;132458"></textarea>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Ссылка на родительскую страницу</span>
+        <span class="field__hint">Оставьте пустым, чтобы удалять абзац по тексту ссылки независимо от адреса</span>
+        <input id="parentUrl" class="field__input mono" type="text" spellcheck="false"
+               placeholder="https://kms.headoffice.psbank.local/content/space/2198/wiki/000000">
+      </label>
+
+      <div class="options">
+        <label class="check">
+          <input id="activeTabs" type="checkbox" checked>
+          <span>Открывать вкладки активными <em>браузер не тормозит скрипты видимой вкладки</em></span>
+        </label>
+        <label class="check check--inline">
+          <span>Пауза между страницами, мс</span>
+          <input id="pauseMs" class="field__input field__input--tiny mono" type="number" min="0" step="100" value="1200">
+        </label>
+      </div>
+
+      <div class="actions">
+        <button id="start" class="btn btn--primary" type="button">Запустить обработку</button>
+        <button id="stop" class="btn" type="button" disabled>Остановить</button>
+      </div>
+      <p id="formError" class="error" hidden></p>
+    </section>
+
+    <section class="card card--report" aria-labelledby="report-title">
+      <div class="report__head">
+        <h2 id="report-title" class="card__title">Результат</h2>
+        <div class="counter mono">
+          <span id="done">0</span><span class="counter__slash">/</span><span id="total">0</span>
+        </div>
+      </div>
+
+      <div class="progress"><div id="progressBar" class="progress__bar"></div></div>
+
+      <p id="status" class="status">Список пуст. Введите идентификаторы и запустите обработку.</p>
+
+      <ol id="results" class="results mono" aria-live="polite"></ol>
+
+      <div class="actions actions--end">
+        <button id="copy" class="btn btn--quiet" type="button" disabled>Скопировать список</button>
+        <button id="save" class="btn btn--quiet" type="button" disabled>Сохранить в файл</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="ui.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "KMS — удаление ссылки на родительскую страницу",
+  "version": "1.0.0",
+  "description": "Массовая правка страниц KMS: удаляет абзац «Ссылка на родительскую страницу» и публикует страницу через мастер согласования.",
+  "permissions": ["tabs", "storage", "alarms", "scripting"],
+  "host_permissions": ["https://kms.headoffice.psbank.local/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Открыть панель обработки"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://kms.headoffice.psbank.local/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

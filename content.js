@@ -89,19 +89,88 @@
     return visible(byIcon) ? byIcon : null;
   }
 
-  async function expandCanvas() {
-    let button = null;
+  /* Наблюдаемое состояние тумблера. Кнопка появляется в разметке раньше, чем
+     React навешивает обработчик, поэтому «слепой» клик молча теряется —
+     единственный надёжный способ убедиться, что он дошёл, это увидеть
+     изменение. Сигналов три: ширина полотна, подсказка на обёртке (у тумблера
+     она обычно переключается) и класс кнопки. Годится любой из них. */
+  function fullWidthState(editable) {
+    const button = findFullWidthButton();
+    const wrapper = button && button.closest('[data-tip]');
+    return {
+      width: Math.round(editable.getBoundingClientRect().width),
+      tip: wrapper ? norm(wrapper.getAttribute('data-tip')) : '',
+      cls: button ? button.className : '',
+      present: !!button
+    };
+  }
+
+  function sameState(a, b) {
+    return a.width === b.width && a.tip === b.tip && a.cls === b.cls && a.present === b.present;
+  }
+
+  /* Пока идёт первичная отрисовка, ширина полотна прыгает. Дожидаемся
+     нескольких одинаковых замеров подряд — это признак того, что вёрстка
+     устоялась и обработчики уже на месте. */
+  async function waitLayoutSettled(editable, { timeout = 12000, hits = 3, interval = 150 } = {}) {
+    const started = Date.now();
+    let last = -1;
+    let streak = 0;
+    for (;;) {
+      const width = Math.round(editable.getBoundingClientRect().width);
+      streak = width > 0 && width === last ? streak + 1 : 0;
+      last = width;
+      if (streak >= hits) return width;
+      if (Date.now() - started > timeout) {
+        log('вёрстка полотна не устоялась — жмём как есть');
+        return width;
+      }
+      await sleep(interval);
+    }
+  }
+
+  /* Попыток намеренно нечётное число: если кнопка сработала, но ни один из
+     сигналов этого не показал, нечётное количество кликов оставит тумблер
+     в том же положении, что и одиночный клик. */
+  const FULL_WIDTH_ATTEMPTS = 3;
+
+  async function expandCanvas(editable) {
     try {
-      button = await waitFor(findFullWidthButton, { timeout: 10000, code: 'NO_FULL_WIDTH' });
+      await waitFor(findFullWidthButton, { timeout: 15000, code: 'NO_FULL_WIDTH' });
     } catch (e) {
       // ширина полотна на содержимое не влияет — не срываем из-за неё работу
       log('кнопка «на всю ширину» не найдена — продолжаем без неё');
       return false;
     }
-    log('кнопка «на всю ширину»');
-    click(button);
-    await sleep(600); // даём полотну перестроиться
-    return true;
+
+    await waitLayoutSettled(editable);
+
+    for (let attempt = 1; attempt <= FULL_WIDTH_ATTEMPTS; attempt += 1) {
+      const button = findFullWidthButton();
+      if (!button) {
+        log('кнопка «на всю ширину» пропала из разметки — продолжаем без неё');
+        return false;
+      }
+
+      const before = fullWidthState(editable);
+      log(attempt === 1 ? 'кнопка «на всю ширину»' : `кнопка «на всю ширину» — попытка ${attempt}`);
+      click(button);
+
+      const reacted = await waitFor(() => !sameState(fullWidthState(editable), before), {
+        timeout: 2500, interval: 100, code: 'NO_FULL_WIDTH'
+      }).catch(() => false);
+
+      if (reacted) {
+        await sleep(400); // даём полотну дорисоваться
+        return true;
+      }
+
+      // ничего не изменилось — клик не дошёл до обработчика; ждём и повторяем
+      await sleep(500 * attempt);
+    }
+
+    log('кнопка «на всю ширину» не отреагировала — продолжаем без неё');
+    return false;
   }
 
   /* ---------- поиск нужного абзаца ---------- */
@@ -351,12 +420,9 @@
     });
     await sleep(800); // дождаться подгрузки содержимого
 
-    // раскрываем полотно до правки: клик по тулбару уводит фокус,
-    // поэтому фокусируем редактор уже после него
-    await expandCanvas();
-
-    editable.focus();
-
+    // Абзац ищем до раскрытия полотна: найденная ссылка означает, что редактор
+    // отрисовал документ, а не только каркас, — по «пустому» редактору жать
+    // тулбар рано, обработчик кнопки ещё не навешен.
     let paragraph = null;
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
@@ -369,6 +435,15 @@
       log('ссылка на родительскую страницу не найдена — страница не публикуется');
       return { code: 'NO_LINK' };
     }
+
+    // раскрываем полотно до правки: клик по тулбару уводит фокус,
+    // поэтому фокусируем редактор уже после него
+    await expandCanvas(editable);
+
+    // смена ширины могла перерисовать документ — берём абзац заново
+    paragraph = findLinkParagraph(editable, job) || paragraph;
+
+    editable.focus();
 
     log('удаление абзаца со ссылкой');
     const removed = await deleteParagraph(editable, paragraph);

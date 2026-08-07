@@ -11,6 +11,7 @@
     editButton: 'button[data-tip="Изменить"], button[title="Изменить"], button[aria-label="Изменить"]',
     canvasWrapper: '.remirror-editor-wrapper',
     editable: '.remirror-editor-wrapper .ProseMirror[contenteditable="true"], .ProseMirror[contenteditable="true"]',
+    fullWidthIcon: '[class*="FullWidthButton_icon"]',
     publishButton: 'button[title="Опубликовать"], button.ArticlePublishButton_button__gfCV9',
     modal: '.wizard-wrapper, .versioning-wrapper, [class*="wizard-wrapper"]',
     navTab: 'li[data-tip="навигация"], li.tabs__list-item',
@@ -68,6 +69,38 @@
     try { el.dispatchEvent(new PointerEvent('pointerup', { ...base, pointerId: 1, isPrimary: true })); } catch (e) {}
     el.dispatchEvent(new MouseEvent('mouseup', base));
     el.dispatchEvent(new MouseEvent('click', base));
+    return true;
+  }
+
+  /* ---------- раскрытие полотна на всю ширину ---------- */
+
+  /* Подсказка «на всю ширину» висит на обёртке кнопки, а не на самой кнопке.
+     Класс иконки — хеш CSS-модуля и меняется при пересборке фронта, поэтому
+     он идёт только запасным путём и сравнивается по префиксу. */
+  function findFullWidthButton() {
+    const wrapper = Array.from(document.querySelectorAll('[data-tip]'))
+      .find(el => norm(el.getAttribute('data-tip')) === 'на всю ширину');
+    if (wrapper) {
+      const byTip = wrapper.tagName === 'BUTTON' ? wrapper : wrapper.querySelector('button');
+      if (visible(byTip)) return byTip;
+    }
+    const icon = document.querySelector(SEL.fullWidthIcon);
+    const byIcon = icon && icon.closest('button');
+    return visible(byIcon) ? byIcon : null;
+  }
+
+  async function expandCanvas() {
+    let button = null;
+    try {
+      button = await waitFor(findFullWidthButton, { timeout: 10000, code: 'NO_FULL_WIDTH' });
+    } catch (e) {
+      // ширина полотна на содержимое не влияет — не срываем из-за неё работу
+      log('кнопка «на всю ширину» не найдена — продолжаем без неё');
+      return false;
+    }
+    log('кнопка «на всю ширину»');
+    click(button);
+    await sleep(600); // даём полотну перестроиться
     return true;
   }
 
@@ -317,6 +350,11 @@
       timeout: 45000, code: 'NO_CANVAS', detail: 'полотно редактора не найдено'
     });
     await sleep(800); // дождаться подгрузки содержимого
+
+    // раскрываем полотно до правки: клик по тулбару уводит фокус,
+    // поэтому фокусируем редактор уже после него
+    await expandCanvas();
+
     editable.focus();
 
     let paragraph = null;

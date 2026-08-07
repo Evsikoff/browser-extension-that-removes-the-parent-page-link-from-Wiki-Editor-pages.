@@ -101,23 +101,56 @@
 
   /* ---------- удаление абзаца без остатка пустой строки ---------- */
 
+  /* Служебные узлы ProseMirror (виджет позиционера, кнопки таблиц) лежат
+     прямо в полотне рядом с абзацами, но контентом не являются. */
+  function isWidget(el) {
+    if (!el) return true;
+    return el.classList.contains('ProseMirror-widget') ||
+      el.getAttribute('contenteditable') === 'false' ||
+      el.getAttribute('data-id') === 'remirror-positioner-widget';
+  }
+
+  function nextBlock(el) {
+    let n = el.nextElementSibling;
+    while (n && isWidget(n)) n = n.nextElementSibling;
+    return n;
+  }
+
+  /* Пустой абзац-разделитель. Внутри может быть один или несколько <br>:
+     последний <br class="ProseMirror-trailingBreak"> дорисовывает сам
+     редактор, остальные — настоящие переводы строки. Любой такой абзац
+     считаем пустой строкой целиком. */
+  function isEmptyBlock(el) {
+    if (!el || el.tagName !== 'P') return false;
+    if (el.querySelector('img, table, iframe, video, audio, hr, a')) return false;
+    return norm(el.textContent) === '';
+  }
+
+  /* Абзац со ссылкой и все идущие следом пустые абзацы: их количество на
+     разных страницах отличается, поэтому считаем его по факту, а не жёстко. */
+  function removalRange(p) {
+    const blanks = [];
+    let n = nextBlock(p);
+    while (n && isEmptyBlock(n)) {
+      blanks.push(n);
+      n = nextBlock(n);
+    }
+    return { blanks, next: n };
+  }
+
   async function deleteParagraph(editable, p) {
     const selection = window.getSelection();
-    const prev = p.previousElementSibling;
-    const next = p.nextElementSibling;
+    const { blanks, next } = removalRange(p);
+
+    if (blanks.length) log(`после ссылки удаляется пустых абзацев: ${blanks.length}`);
 
     editable.focus();
     const range = document.createRange();
 
-    if (prev) {
-      // от конца предыдущего блока до конца удаляемого — уходит и сам разрыв абзаца
-      range.selectNodeContents(prev);
-      range.collapse(false);
-      const tail = document.createRange();
-      tail.selectNodeContents(p);
-      tail.collapse(false);
-      range.setEnd(tail.endContainer, tail.endOffset);
-    } else if (next) {
+    if (next) {
+      // от начала абзаца со ссылкой до начала первого содержательного блока —
+      // уходят и сам абзац, и все пустые строки между ними, а текст
+      // следующего блока поднимается в самое начало страницы
       range.selectNodeContents(p);
       range.collapse(true);
       const head = document.createRange();
@@ -125,7 +158,13 @@
       head.collapse(true);
       range.setEnd(head.startContainer, head.startOffset);
     } else {
+      // содержательных блоков дальше нет — забираем всё до конца последнего пустого
       range.selectNodeContents(p);
+      range.collapse(true);
+      const tail = document.createRange();
+      tail.selectNodeContents(blanks.length ? blanks[blanks.length - 1] : p);
+      tail.collapse(false);
+      range.setEnd(tail.endContainer, tail.endOffset);
     }
 
     selection.removeAllRanges();
@@ -136,7 +175,7 @@
     await sleep(350);
 
     if (findLinkParagraph(editable, currentJob)) {
-      // запасной путь: событие удаления, затем прямое удаление узла
+      // запасной путь: событие удаления, затем прямое удаление узлов
       try {
         editable.dispatchEvent(new InputEvent('beforeinput', {
           bubbles: true, cancelable: true, inputType: 'deleteContentBackward'
@@ -145,13 +184,58 @@
       await sleep(200);
       const still = findLinkParagraph(editable, currentJob);
       if (still) {
+        removalRange(still).blanks.forEach(el => el.remove());
         still.remove();
         editable.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
         await sleep(400);
       }
     }
 
-    return !findLinkParagraph(editable, currentJob);
+    if (findLinkParagraph(editable, currentJob)) return false;
+
+    // ссылка ушла, но перед первым текстом мог остаться пустой абзац —
+    // подчищаем начало полотна, чтобы текст стоял в самой первой строке
+    await trimLeadingBlanks(editable);
+    return true;
+  }
+
+  async function trimLeadingBlanks(editable) {
+    let first = editable.firstElementChild;
+    while (first && isWidget(first)) first = nextBlock(first);
+    if (!isEmptyBlock(first)) return;
+
+    const { next } = removalRange(first);
+    if (!next) return; // кроме пустых абзацев ничего нет — не трогаем
+
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(first);
+    range.collapse(true);
+    const head = document.createRange();
+    head.selectNodeContents(next);
+    head.collapse(true);
+    range.setEnd(head.startContainer, head.startOffset);
+
+    editable.focus();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    await sleep(150);
+
+    try { document.execCommand('delete'); } catch (e) {}
+    await sleep(300);
+
+    let head2 = editable.firstElementChild;
+    while (head2 && isWidget(head2)) head2 = nextBlock(head2);
+    if (isEmptyBlock(head2)) {
+      // запасной путь: убираем оставшиеся пустые абзацы напрямую
+      while (head2 && isEmptyBlock(head2) && nextBlock(head2)) {
+        const victim = head2;
+        head2 = nextBlock(head2);
+        victim.remove();
+      }
+      editable.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+      await sleep(300);
+    }
   }
 
   /* ---------- ввод значения в поле React ---------- */

@@ -12,6 +12,7 @@
     canvasWrapper: '.remirror-editor-wrapper',
     editable: '.remirror-editor-wrapper .ProseMirror[contenteditable="true"], .ProseMirror[contenteditable="true"]',
     fullWidthIcon: '[class*="FullWidthButton_icon"]',
+    editorContainer: '.article-editor__editor',
     publishButton: 'button[title="Опубликовать"], button.ArticlePublishButton_button__gfCV9',
     modal: '.wizard-wrapper, .versioning-wrapper, [class*="wizard-wrapper"]',
     navTab: 'li[data-tip="навигация"], li.tabs__list-item',
@@ -89,11 +90,41 @@
     return visible(byIcon) ? byIcon : null;
   }
 
-  /* Наблюдаемое состояние тумблера. Кнопка появляется в разметке раньше, чем
-     React навешивает обработчик, поэтому «слепой» клик молча теряется —
-     единственный надёжный способ убедиться, что он дошёл, это увидеть
-     изменение. Сигналов три: ширина полотна, подсказка на обёртке (у тумблера
-     она обычно переключается) и класс кнопки. Годится любой из них. */
+  /* Ширина отображения страницы в режиме правки случайна: одни страницы
+     открываются уже раскрытыми, другие — узкими. Состояние читается двумя
+     независимыми способами.
+
+     1. Класс кнопки. Раскрытая: ToolbarButton_toolbar__button--active__g+p2p,
+        узкая — этого класса нет. Хвост после «--active» это хеш CSS-модуля,
+        он меняется при пересборке, поэтому сравниваем по префиксу. Префикс
+        взят с «--active», а не с «--»: класс «--disabled» носят выключенные
+        кнопки тулбара и спутать их нельзя.
+     2. Ограничение ширины на контейнере редактора: «max-width: unset» у
+        раскрытой против «max-width: 800px» у узкой.
+
+     Подсказка на обёртке для этого не годится: она остаётся «на всю ширину»
+     в обоих состояниях.
+
+     Возвращает true — раскрыта, false — узкая, null — определить не удалось. */
+  const FULL_WIDTH_ACTIVE_CLASS = 'ToolbarButton_toolbar__button--active';
+
+  function isFullWidth() {
+    const button = findFullWidthButton();
+    if (button) {
+      return Array.from(button.classList).some(cls => cls.startsWith(FULL_WIDTH_ACTIVE_CLASS));
+    }
+
+    const editor = document.querySelector(SEL.editorContainer);
+    if (!editor) return null;
+
+    const limit = norm(editor.style.maxWidth) || norm(getComputedStyle(editor).maxWidth);
+    // снятое ограничение — полотно раскрыто, числовое — узкое
+    return !limit || limit === 'unset' || limit === 'none' || limit === 'initial';
+  }
+
+  /* Запасной путь для случая, когда состояние прочитать не удалось: тогда
+     единственный доступный признак сработавшего клика — любое изменение
+     наблюдаемых свойств. */
   function fullWidthState(editable) {
     const button = findFullWidthButton();
     const wrapper = button && button.closest('[data-tip]');
@@ -129,9 +160,9 @@
     }
   }
 
-  /* Попыток намеренно нечётное число: если кнопка сработала, но ни один из
-     сигналов этого не показал, нечётное количество кликов оставит тумблер
-     в том же положении, что и одиночный клик. */
+  /* Клик может потеряться, если обработчик ещё не навешен, — тогда повторяем.
+     Состояние перечитывается перед каждой попыткой, поэтому лишнего клика по
+     уже раскрытому полотну не будет. */
   const FULL_WIDTH_ATTEMPTS = 3;
 
   async function expandCanvas(editable) {
@@ -145,32 +176,62 @@
 
     await waitLayoutSettled(editable);
 
+    if (isFullWidth() === null) return expandCanvasBlind(editable);
+
     for (let attempt = 1; attempt <= FULL_WIDTH_ATTEMPTS; attempt += 1) {
+      if (isFullWidth()) {
+        log(attempt === 1
+          ? 'страница уже раскрыта на всю ширину — кнопка не нужна'
+          : 'полотно раскрыто на всю ширину');
+        return true;
+      }
+
       const button = findFullWidthButton();
       if (!button) {
         log('кнопка «на всю ширину» пропала из разметки — продолжаем без неё');
         return false;
       }
 
-      const before = fullWidthState(editable);
-      log(attempt === 1 ? 'кнопка «на всю ширину»' : `кнопка «на всю ширину» — попытка ${attempt}`);
+      log(attempt === 1
+        ? 'страница узкая — жмём «на всю ширину»'
+        : `кнопка «на всю ширину» — попытка ${attempt}`);
       click(button);
 
-      const reacted = await waitFor(() => !sameState(fullWidthState(editable), before), {
+      const expanded = await waitFor(isFullWidth, {
         timeout: 2500, interval: 100, code: 'NO_FULL_WIDTH'
       }).catch(() => false);
 
-      if (reacted) {
+      if (expanded) {
         await sleep(400); // даём полотну дорисоваться
         return true;
       }
 
-      // ничего не изменилось — клик не дошёл до обработчика; ждём и повторяем
+      // клик не дошёл до обработчика; ждём и повторяем
       await sleep(500 * attempt);
     }
 
     log('кнопка «на всю ширину» не отреагировала — продолжаем без неё');
     return false;
+  }
+
+  /* Разметка изменилась и состояние прочитать нечем: жмём один раз и считаем
+     успехом любое изменение. Повторов здесь нет намеренно — не зная состояния,
+     повторный клик рискует свернуть уже раскрытое полотно. */
+  async function expandCanvasBlind(editable) {
+    const button = findFullWidthButton();
+    if (!button) return false;
+
+    log('состояние ширины определить не удалось — жмём «на всю ширину» вслепую');
+    const before = fullWidthState(editable);
+    click(button);
+
+    const reacted = await waitFor(() => !sameState(fullWidthState(editable), before), {
+      timeout: 2500, interval: 100, code: 'NO_FULL_WIDTH'
+    }).catch(() => false);
+
+    if (!reacted) log('кнопка «на всю ширину» не отреагировала — продолжаем без неё');
+    await sleep(400);
+    return !!reacted;
   }
 
   /* ---------- поиск нужного абзаца ---------- */
